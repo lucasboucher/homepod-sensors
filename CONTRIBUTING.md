@@ -19,12 +19,14 @@ Do not paste those files into pull requests or issue comments. See
 
 ## Tests you can run without secrets
 
+From the repository root:
+
 ```bash
+python3 -m py_compile collector/app.py
+
 cd extractor
 swift build
 .build/arm64-apple-macosx/debug/HomePodKeychainExtractor --help
-
-python3 -m py_compile collector/app.py
 ```
 
 Do not run extraction or collector pairing tests in CI against real HomePods

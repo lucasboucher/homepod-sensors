@@ -1,0 +1,12 @@
+# Known-good transitive pins for homekit[IP]==0.19.0 on Python 3.11.
+# Direct dependencies of homekit plus the [IP] extra (zeroconf).
+# Do not add OS packages or unrelated freeze noise here.
+
+ed25519==1.5
+hkdf==0.0.3
+tlv8==0.10.0
+cryptography==43.0.3
+cffi==2.1.1
+pycparser==3.0
+zeroconf==0.132.2
+ifaddr==0.2.0

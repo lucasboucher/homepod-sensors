@@ -44,6 +44,7 @@ Functional reference: [docs/SOURCE_PINS.md](SOURCE_PINS.md)
 - Apple Development certificate in Keychain Access
 - Intermediate CA certificates if needed (Apple WWDRCA, Apple WWDRCAG3)
 - Project validated: `./scripts/01-check-environment.sh --build`
+- Apple Silicon (arm64); orchestration scripts look for the arm64 Swift build path
 
 ## Phase 1 — Environment check
 

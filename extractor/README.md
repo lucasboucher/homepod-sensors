@@ -1,7 +1,7 @@
 # HomePod Keychain Extractor
 
 This is the macOS extractor component. Run the commands below from this
-directory (`extractor/`).
+directory (`extractor/`). Orchestration scripts target Apple Silicon (arm64).
 
 Extract HomeKit Pairing Identity and Paired HomeKit Accessory keys from the macOS
 keychain so any HAP client can talk to already-paired HomePods without resetting

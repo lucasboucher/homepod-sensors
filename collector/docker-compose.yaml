@@ -7,6 +7,9 @@ services:
     network_mode: host
     environment:
       HTTP_ENDPOINT_URL: ${HTTP_ENDPOINT_URL}
-      PAIRING_FILE: ${PAIRING_FILE}
+      PAIRING_FILE: /app/pairing.json
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+      HOMEKIT_TIMEOUT_SECONDS: ${HOMEKIT_TIMEOUT_SECONDS:-15}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-10}
     volumes:
       - ${PAIRING_FILE_HOST}:/app/pairing.json:ro

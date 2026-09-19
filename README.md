@@ -73,6 +73,7 @@ You follow the SIP/AMFI steps at your own risk. See the disclaimer below.
 ## Requirements
 
 - a Mac signed into the same Apple Home as the HomePods, with Xcode
+- Apple Silicon (arm64) for the extractor orchestration scripts
 - HomePods that already expose temperature and humidity in Apple Home
 - for the collector: a Linux host on the same LAN (Raspberry Pi is typical)
   and Docker with host networking
@@ -97,7 +98,9 @@ homepod-sensors/
 │   └── README.md
 ├── collector/                # HAP client → temperature/humidity JSON
 │   ├── Dockerfile
+│   ├── docker-compose.yaml
 │   ├── requirements.txt
+│   ├── constraints.txt
 │   ├── app.py
 │   ├── pairing.example.json
 │   ├── env.example
@@ -196,9 +199,41 @@ docker run --rm \
 Host networking is required so the container can reach HomePods on the LAN
 (including HAP/Bonjour if an address in the pairing file is stale).
 
-Any Docker host or orchestrator can run this image the same way (compose,
-systemd, Dokploy, …). Do not bake `pairing.json` or the endpoint URL into
+The pairing file is created locally from extractor output and must never be
+committed. At runtime the collector mounts it read-only at `/app/pairing.json`.
+
+### Docker Compose
+
+From `collector/`, copy [collector/env.example](collector/env.example) to
+`.env` (gitignored). Set:
+
+- `PAIRING_FILE_HOST` — absolute host path to your local `pairing.json`
+- `HTTP_ENDPOINT_URL` — any HTTP endpoint that accepts the JSON POST
+  (your service, a webhook, n8n, Home Assistant, or anything else)
+
+`PAIRING_FILE` inside the container is always `/app/pairing.json`. You do not
+need to set it. Optional poll/timeout variables default to 60 / 15 / 10
+seconds if omitted.
+
+```bash
+cd collector
+cp env.example .env
+# edit .env: PAIRING_FILE_HOST and HTTP_ENDPOINT_URL (fictitious values in the example)
+docker compose --env-file .env up --build
+```
+
+From the repository root (Dokploy-style):
+
+```bash
+docker compose --env-file collector/.env -f collector/docker-compose.yaml up --build
+```
+
+Compose uses `network_mode: host` and mounts `${PAIRING_FILE_HOST}` at
+`/app/pairing.json:ro`. Do not bake `pairing.json` or the endpoint URL into
 the image.
+
+Any Docker host or orchestrator can run this image the same way (compose,
+systemd, Dokploy, …).
 
 Full collector reference: [collector/README.md](collector/README.md).
 
@@ -238,8 +273,9 @@ The collector POSTs:
 `HTTP_ENDPOINT_URL`. `N8N_TIMEOUT_SECONDS` is an alias of
 `HTTP_TIMEOUT_SECONDS`. Prefer the generic names.
 
-See [collector/env.example](collector/env.example). Never commit a filled
-`.env`.
+See [collector/env.example](collector/env.example). For Compose, also set
+`PAIRING_FILE_HOST` (host path to the local pairing file). Never commit a
+filled `.env`.
 
 ## What this project does not do
 
@@ -276,5 +312,6 @@ The collector uses [homekit_python](https://github.com/jlusiardi/homekit_python)
 
 ## License
 
-MIT for original project files. Vendored extractor libraries keep their
-upstream copyright notices. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+Original project files are MIT. Third-party code in `extractor/Vendored/`
+keeps its own copyright notices and is **not** MIT-licensed by this
+repository. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).

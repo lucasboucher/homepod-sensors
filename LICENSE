@@ -1,3 +1,13 @@
+The MIT License below applies to original files in this repository
+(collector, orchestration scripts, project documentation, and first-party
+extractor sources).
+
+Third-party code under `extractor/Vendored/` is **not** licensed as MIT by
+this file. Those files keep their original copyright notices and terms.
+See NOTICE.md for the provenance information that is available.
+
+---
+
 MIT License
 
 Copyright (c) 2026 homepod-sensors contributors
@@ -21,4 +31,4 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 Vendored sources under `extractor/Vendored/` retain their original copyright
-notices. See NOTICE.md.
+notices and are not covered by the MIT license above. See NOTICE.md.

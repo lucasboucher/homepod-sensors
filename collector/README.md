@@ -88,6 +88,47 @@ docker run --rm \
 Replace the endpoint URL and pairing-file path with your local values.
 Do not commit those values.
 
+The pairing file is created locally and must never be committed. The collector
+mounts it read-only at `/app/pairing.json`. The HTTP endpoint is generic: any
+service that accepts the JSON POST. n8n and Home Assistant are only example
+consumers.
+
+## Docker Compose
+
+[docker-compose.yaml](docker-compose.yaml) uses `network_mode: host` and mounts
+the host pairing file at `/app/pairing.json:ro`.
+
+Copy [env.example](env.example) to `.env` (gitignored):
+
+```bash
+cd collector
+cp env.example .env
+```
+
+Set at least:
+
+| Variable | Role |
+|----------|------|
+| `PAIRING_FILE_HOST` | Absolute path to your local `pairing.json` on the host |
+| `HTTP_ENDPOINT_URL` | URL that receives `POST` + JSON |
+
+Compose always sets `PAIRING_FILE=/app/pairing.json` inside the container.
+Optional: `POLL_INTERVAL_SECONDS` (default 60), `HOMEKIT_TIMEOUT_SECONDS`
+(default 15), `HTTP_TIMEOUT_SECONDS` (default 10).
+
+```bash
+docker compose --env-file .env up --build
+```
+
+From the repository root (including Dokploy `--env-file collector/.env`):
+
+```bash
+docker compose --env-file collector/.env -f collector/docker-compose.yaml up --build
+```
+
+The image runs as uid 1000. The host pairing file must be readable by that
+user (for example mode `644`). Do not make it world-writable.
+
 The same flags work with Docker Compose, systemd, or any orchestrator that
 can set host networking, environment variables, and a bind mount.
 
@@ -106,8 +147,8 @@ Aliases (same meaning, prefer the names above):
 - `WEBHOOK_URL`, `N8N_WEBHOOK_URL` → `HTTP_ENDPOINT_URL`
 - `N8N_TIMEOUT_SECONDS` → `HTTP_TIMEOUT_SECONDS`
 
-See [env.example](env.example). Never put real endpoint URLs or pairing data
-in git.
+See [env.example](env.example). For Compose, also set `PAIRING_FILE_HOST`.
+Never put real endpoint URLs or pairing data in git.
 
 ## JSON payload
 

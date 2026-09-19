@@ -9,9 +9,10 @@ under the MIT License. See `LICENSE`.
 
 ## Vendored extractor dependencies
 
-Files under `extractor/Vendored/` are restored copies of historical libraries
-originally written by Pedro José Pereira Vieito and recovered from public
-mirrors. Those files keep their original copyright headers.
+Files under `extractor/Vendored/` are **not** covered by this repository's MIT
+license. They are restored copies of historical libraries originally written
+by Pedro José Pereira Vieito and recovered from public mirrors. Those files
+keep their original copyright headers and terms.
 
 Provenance and commit pins:
 
