@@ -190,7 +190,7 @@ docker build -t homepod-collector ./collector
 docker run --rm \
   --network host \
   -e HTTP_ENDPOINT_URL="https://example.invalid/homepod-readings" \
-  -e POLL_INTERVAL_SECONDS=60 \
+  -e POLL_INTERVAL_SECONDS=600 \
   -v /absolute/path/to/pairing.json:/app/pairing.json:ro \
   homepod-collector
 ```
@@ -212,8 +212,11 @@ From `collector/`, copy [collector/env.example](collector/env.example) to
   (your service, a webhook, n8n, Home Assistant, or anything else)
 
 `PAIRING_FILE` inside the container is always `/app/pairing.json`. You do not
-need to set it. Optional poll/timeout variables default to 60 / 15 / 10
-seconds if omitted.
+need to set it. Optional poll/timeout variables default to 600 / 15 / 10
+seconds if omitted. The default poll interval is 10 minutes; the collector
+waits for the next clock-aligned multiple of that interval (HH:00, HH:10,
+HH:20, HH:30, HH:40, HH:50 in UTC) instead of sleeping 10 minutes after each
+cycle. Other intervals that divide an hour the same way stay clock-aligned.
 
 ```bash
 cd collector
@@ -265,7 +268,7 @@ The collector POSTs:
 |----------|----------|---------|-------------|
 | `PAIRING_FILE` | no | `/app/pairing.json` | Path to the runtime pairing file |
 | `HTTP_ENDPOINT_URL` | **yes** | none | URL that receives the JSON POST |
-| `POLL_INTERVAL_SECONDS` | no | `60` | Seconds between collection cycles |
+| `POLL_INTERVAL_SECONDS` | no | `600` | Seconds between clock-aligned collection slots |
 | `HOMEKIT_TIMEOUT_SECONDS` | no | `15` | Timeout for one HomeKit attempt |
 | `HTTP_TIMEOUT_SECONDS` | no | `10` | Timeout for one HTTP POST |
 

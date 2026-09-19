@@ -23,6 +23,7 @@ From the repository root:
 
 ```bash
 python3 -m py_compile collector/app.py
+python3 -m unittest collector/test_schedule.py
 
 cd extractor
 swift build

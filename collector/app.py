@@ -22,7 +22,7 @@ from homekit.model.characteristics import CharacteristicsTypes
 
 LOG_FORMAT = "%(levelname)s %(message)s"
 DEFAULT_PAIRING_FILE = "/app/pairing.json"
-DEFAULT_POLL_INTERVAL_SECONDS = 60
+DEFAULT_POLL_INTERVAL_SECONDS = 600
 DEFAULT_HOMEKIT_TIMEOUT_SECONDS = 15
 DEFAULT_HTTP_TIMEOUT_SECONDS = 10
 HOMEKIT_ATTEMPTS = 3
@@ -104,6 +104,35 @@ def exception_label(exc: BaseException) -> str:
 
 def utc_timestamp() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def next_aligned_unix(now_unix: float, interval_seconds: int) -> int:
+    """Return the next exclusive Unix-time multiple of interval_seconds after now."""
+    if interval_seconds <= 0:
+        raise ValueError("interval_seconds must be greater than 0")
+    now_sec = int(now_unix)
+    return (now_sec // interval_seconds + 1) * interval_seconds
+
+
+def next_aligned_datetime(now: datetime, interval_seconds: int) -> datetime:
+    """Return the next exclusive clock-aligned slot strictly after `now`.
+
+    Slots are multiples of `interval_seconds` on the Unix epoch (UTC). For 600
+    that is HH:00, HH:10, HH:20, HH:30, HH:40, HH:50. A time that already sits
+    on a slot yields the following slot. Hour and midnight boundaries wrap
+    normally. Missed slots are skipped: the result is always the next future
+    slot, never a catch-up burst.
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    next_unix = next_aligned_unix(now.timestamp(), interval_seconds)
+    return datetime.fromtimestamp(next_unix, tz=timezone.utc)
+
+
+def seconds_until_next_aligned_slot(now: datetime, interval_seconds: int) -> float:
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return max(0.0, next_aligned_unix(now.timestamp(), interval_seconds) - now.timestamp())
 
 
 def as_json_number(value: Any) -> int | float:
@@ -317,7 +346,15 @@ def run_forever() -> None:
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
 
+    interval = config["poll_interval_seconds"]
     while not STOP_EVENT.is_set():
+        now = datetime.now(timezone.utc)
+        delay = seconds_until_next_aligned_slot(now, interval)
+        next_slot = next_aligned_datetime(now, interval)
+        LOGGER.info("Next collection at %s", next_slot.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        if STOP_EVENT.wait(delay):
+            break
+
         try:
             sensors = collect_all(pairings)
             if sensors:
@@ -336,8 +373,6 @@ def run_forever() -> None:
             LOGGER.info("Collection completed")
         except Exception as exc:
             LOGGER.error("Collection cycle failed: %s", exception_label(exc))
-
-        STOP_EVENT.wait(config["poll_interval_seconds"])
 
 
 if __name__ == "__main__":

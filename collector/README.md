@@ -79,7 +79,7 @@ HAP discovery on the host network.
 docker run --rm \
   --network host \
   -e HTTP_ENDPOINT_URL="https://example.invalid/homepod-readings" \
-  -e POLL_INTERVAL_SECONDS=60 \
+  -e POLL_INTERVAL_SECONDS=600 \
   -e PAIRING_FILE=/app/pairing.json \
   -v /absolute/path/to/pairing.json:/app/pairing.json:ro \
   homepod-collector
@@ -113,8 +113,9 @@ Set at least:
 | `HTTP_ENDPOINT_URL` | URL that receives `POST` + JSON |
 
 Compose always sets `PAIRING_FILE=/app/pairing.json` inside the container.
-Optional: `POLL_INTERVAL_SECONDS` (default 60), `HOMEKIT_TIMEOUT_SECONDS`
-(default 15), `HTTP_TIMEOUT_SECONDS` (default 10).
+Optional: `POLL_INTERVAL_SECONDS` (default 600, clock-aligned 10-minute
+slots), `HOMEKIT_TIMEOUT_SECONDS` (default 15), `HTTP_TIMEOUT_SECONDS`
+(default 10).
 
 ```bash
 docker compose --env-file .env up --build
@@ -138,7 +139,7 @@ can set host networking, environment variables, and a bind mount.
 |----------|----------|---------|-------------|
 | `PAIRING_FILE` | no | `/app/pairing.json` | Path to the runtime pairing file |
 | `HTTP_ENDPOINT_URL` | **yes** | none | URL that receives the JSON POST |
-| `POLL_INTERVAL_SECONDS` | no | `60` | Seconds between collection cycles |
+| `POLL_INTERVAL_SECONDS` | no | `600` | Seconds between clock-aligned collection slots |
 | `HOMEKIT_TIMEOUT_SECONDS` | no | `15` | Timeout for one HomeKit attempt |
 | `HTTP_TIMEOUT_SECONDS` | no | `10` | Timeout for one HTTP POST |
 
@@ -149,6 +150,12 @@ Aliases (same meaning, prefer the names above):
 
 See [env.example](env.example). For Compose, also set `PAIRING_FILE_HOST`.
 Never put real endpoint URLs or pairing data in git.
+
+By default the collector runs every 10 minutes, aligned to the clock
+(`00:00`, `00:10`, … `00:50` in UTC). It waits for the next multiple of
+`POLL_INTERVAL_SECONDS` rather than sleeping that long after a cycle. If a
+cycle overruns a slot, missed slots are skipped. Intervals that divide an
+hour evenly stay on round clock times.
 
 ## JSON payload
 
