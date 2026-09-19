@@ -22,6 +22,7 @@ from homekit.model.characteristics import CharacteristicsTypes
 
 LOG_FORMAT = "%(levelname)s %(message)s"
 DEFAULT_PAIRING_FILE = "/app/pairing.json"
+DEFAULT_ROOMS_FILE = "/app/rooms.json"
 DEFAULT_POLL_INTERVAL_SECONDS = 600
 DEFAULT_HOMEKIT_TIMEOUT_SECONDS = 15
 DEFAULT_HTTP_TIMEOUT_SECONDS = 10
@@ -32,6 +33,8 @@ HTTP_BACKOFF_SECONDS = (1, 2)
 
 TEMPERATURE_UUID = CharacteristicsTypes.get_uuid(CharacteristicsTypes.TEMPERATURE_CURRENT).upper()
 HUMIDITY_UUID = CharacteristicsTypes.get_uuid(CharacteristicsTypes.RELATIVE_HUMIDITY_CURRENT).upper()
+NAME_UUID = CharacteristicsTypes.get_uuid(CharacteristicsTypes.NAME).upper()
+ACCESSORY_INFORMATION_UUID = "0000003E-0000-1000-8000-0026BB765291"
 
 LOGGER = logging.getLogger("homepod-collector")
 STOP_EVENT = threading.Event()
@@ -87,6 +90,7 @@ def load_config() -> dict[str, Any]:
 
     return {
         "pairing_file": pairing_file,
+        "rooms_file": env_str("ROOMS_FILE") or DEFAULT_ROOMS_FILE,
         "endpoint_url": endpoint_url,
         "poll_interval_seconds": env_int("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS),
         "homekit_timeout_seconds": env_int("HOMEKIT_TIMEOUT_SECONDS", DEFAULT_HOMEKIT_TIMEOUT_SECONDS),
@@ -133,6 +137,96 @@ def seconds_until_next_aligned_slot(now: datetime, interval_seconds: int) -> flo
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     return max(0.0, next_aligned_unix(now.timestamp(), interval_seconds) - now.timestamp())
+
+
+def normalize_rooms_key(value: str) -> str:
+    return value.strip().casefold()
+
+
+def pairing_accessory_id(pairing: Any) -> str:
+    data = getattr(pairing, "pairing_data", None)
+    if not isinstance(data, dict):
+        getter = getattr(pairing, "_get_pairing_data", None)
+        data = getter() if callable(getter) else None
+    if not isinstance(data, dict):
+        return ""
+    raw = data.get("AccessoryPairingID")
+    if not isinstance(raw, str):
+        return ""
+    return raw.strip()
+
+
+def load_rooms_map(path: str) -> dict[str, str]:
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        LOGGER.warning("Ignoring rooms file %s: %s", path, exception_label(exc))
+        return {}
+    if not isinstance(payload, dict):
+        LOGGER.warning("Ignoring rooms file %s: root value must be an object", path)
+        return {}
+
+    rooms: dict[str, str] = {}
+    for raw_key, raw_value in payload.items():
+        if not isinstance(raw_key, str) or not isinstance(raw_value, str):
+            continue
+        key = normalize_rooms_key(raw_key)
+        value = raw_value.strip()
+        if not key or not value:
+            continue
+        rooms[key] = value
+    return rooms
+
+
+def hap_accessory_name(accessories: list[dict[str, Any]], preferred_aids: set[int] | None = None) -> str | None:
+    preferred = preferred_aids or set()
+
+    def _name_from_accessory(accessory: dict[str, Any]) -> str | None:
+        for service in accessory.get("services", []):
+            service_type = str(service.get("type") or "").upper()
+            if service_type not in (ACCESSORY_INFORMATION_UUID, "3E"):
+                continue
+            for characteristic in service.get("characteristics", []):
+                if normalize_characteristic_uuid(characteristic.get("type")) != NAME_UUID:
+                    continue
+                value = characteristic.get("value")
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
+    for accessory in accessories:
+        aid = accessory.get("aid")
+        if preferred and aid not in preferred:
+            continue
+        name = _name_from_accessory(accessory)
+        if name:
+            return name
+    if preferred:
+        for accessory in accessories:
+            name = _name_from_accessory(accessory)
+            if name:
+                return name
+    return None
+
+
+def resolve_sensor_name(
+    device_id: str,
+    pairing_alias: str,
+    hap_name: str | None,
+    rooms: dict[str, str],
+) -> str:
+    for candidate in (device_id, pairing_alias):
+        if not candidate:
+            continue
+        mapped = rooms.get(normalize_rooms_key(candidate))
+        if mapped:
+            return mapped
+    if isinstance(hap_name, str) and hap_name.strip():
+        return hap_name.strip()
+    return pairing_alias
 
 
 def as_json_number(value: Any) -> int | float:
@@ -201,7 +295,7 @@ def close_pairing(pairing: Any) -> None:
             pass
 
 
-def read_homepod_sensors(name: str, pairing: Any) -> dict[str, Any]:
+def read_homepod_sensors(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str, Any]:
     accessories = pairing.list_accessories_and_characteristics()
     temperature_ids, humidity_ids = find_sensor_characteristics(accessories)
     requested = temperature_ids + humidity_ids
@@ -214,7 +308,14 @@ def read_homepod_sensors(name: str, pairing: Any) -> dict[str, Any]:
     if temperature is None and humidity is None:
         raise RuntimeError("temperature and humidity readings were empty")
 
-    reading: dict[str, Any] = {"name": name}
+    preferred_aids = {aid for aid, _iid in requested}
+    display_name = resolve_sensor_name(
+        pairing_accessory_id(pairing),
+        name,
+        hap_accessory_name(accessories, preferred_aids),
+        rooms,
+    )
+    reading: dict[str, Any] = {"name": display_name}
     if temperature is not None:
         reading["temperature_c"] = temperature
     if humidity is not None:
@@ -222,11 +323,11 @@ def read_homepod_sensors(name: str, pairing: Any) -> dict[str, Any]:
     return reading
 
 
-def collect_homepod(name: str, pairing: Any) -> dict[str, Any] | None:
+def collect_homepod(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str, Any] | None:
     last_error = "unknown error"
     for attempt in range(1, HOMEKIT_ATTEMPTS + 1):
         try:
-            return read_homepod_sensors(name, pairing)
+            return read_homepod_sensors(name, pairing, rooms)
         except Exception as exc:
             last_error = exception_label(exc)
             close_pairing(pairing)
@@ -244,13 +345,13 @@ def collect_homepod(name: str, pairing: Any) -> dict[str, Any] | None:
     return None
 
 
-def collect_all(pairings: dict[str, Any]) -> list[dict[str, Any]]:
+def collect_all(pairings: dict[str, Any], rooms: dict[str, str]) -> list[dict[str, Any]]:
     LOGGER.info("Collecting sensor data")
     names = list(pairings.keys())
     readings: list[dict[str, Any] | None] = [None] * len(names)
 
     def _collect(index: int, name: str) -> None:
-        readings[index] = collect_homepod(name, pairings[name])
+        readings[index] = collect_homepod(name, pairings[name], rooms)
 
     with ThreadPoolExecutor(max_workers=max(1, len(names)), thread_name_prefix="homepod") as executor:
         futures = [executor.submit(_collect, index, name) for index, name in enumerate(names)]
@@ -342,6 +443,11 @@ def run_forever() -> None:
     controller = load_controller(config["pairing_file"])
     pairings = controller.get_pairings()
     LOGGER.info("Loaded %s HomePods", len(pairings))
+    rooms = load_rooms_map(config["rooms_file"])
+    if rooms:
+        LOGGER.info("Loaded %s room mapping(s)", len(rooms))
+    else:
+        LOGGER.info("No room mappings; using HAP or pairing aliases")
 
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
@@ -356,7 +462,7 @@ def run_forever() -> None:
             break
 
         try:
-            sensors = collect_all(pairings)
+            sensors = collect_all(pairings, rooms)
             if sensors:
                 LOGGER.info("Sending %s sensor readings", len(sensors))
                 payload = {

@@ -1,4 +1,4 @@
-**Do not paste `pairing.json`, `dump.txt`, HomeKit keys, certificates, signing identities, private IPs, or HTTP endpoint URLs.**
+**Do not paste `pairing.json`, `rooms.json`, `dump.txt`, HomeKit keys, certificates, signing identities, private IPs, or HTTP endpoint URLs.**
 
 Describe the problem with:
 

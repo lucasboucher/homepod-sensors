@@ -2,9 +2,9 @@
 
 ## Secrets
 
-Do not commit `pairing.json`, dumps, certificates, `.env` files, endpoint URLs,
-or any real HomeKit keys. Use the placeholder files in `collector/` as the
-template for examples.
+Do not commit `pairing.json`, `rooms.json`, dumps, certificates, `.env` files,
+endpoint URLs, or any real HomeKit keys. Use the placeholder files in
+`collector/` as the template for examples.
 
 Do not paste those files into pull requests or issue comments. See
 [SECURITY.md](SECURITY.md).
@@ -22,8 +22,8 @@ Do not paste those files into pull requests or issue comments. See
 From the repository root:
 
 ```bash
-python3 -m py_compile collector/app.py
-python3 -m unittest collector/test_schedule.py
+python3 -m py_compile collector/app.py collector/test_schedule.py
+python3 -m unittest discover -s collector -p 'test_*.py'
 
 cd extractor
 swift build

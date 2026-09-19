@@ -8,8 +8,10 @@ services:
     environment:
       HTTP_ENDPOINT_URL: ${HTTP_ENDPOINT_URL}
       PAIRING_FILE: /app/pairing.json
+      ROOMS_FILE: /app/rooms.json
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-600}
       HOMEKIT_TIMEOUT_SECONDS: ${HOMEKIT_TIMEOUT_SECONDS:-15}
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-10}
     volumes:
       - ${PAIRING_FILE_HOST}:/app/pairing.json:ro
+      - ${ROOMS_FILE_HOST}:/app/rooms.json:ro

@@ -22,6 +22,7 @@ def _install_homekit_stub() -> None:
     class CharacteristicsTypes:
         TEMPERATURE_CURRENT = "temperature"
         RELATIVE_HUMIDITY_CURRENT = "humidity"
+        NAME = "name"
 
         @staticmethod
         def get_uuid(value: str) -> str:

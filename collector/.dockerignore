@@ -1,4 +1,5 @@
 pairing.json
+rooms.json
 .env
 .env.*
 __pycache__

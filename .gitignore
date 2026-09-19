@@ -15,10 +15,13 @@ dump.txt
 **/dump.txt
 reports/
 
-# HomeKit pairing data and other secrets — never commit
+# HomeKit pairing data, local room labels, and other secrets — never commit
 pairing.json
 **/pairing.json
 !**/pairing.example.json
+rooms.json
+**/rooms.json
+!**/rooms.example.json
 *.pem
 *.p8
 *.p12
