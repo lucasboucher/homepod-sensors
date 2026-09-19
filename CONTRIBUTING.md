@@ -22,7 +22,7 @@ Do not paste those files into pull requests or issue comments. See
 From the repository root:
 
 ```bash
-python3 -m py_compile collector/app.py collector/test_schedule.py
+python3 -m py_compile collector/app.py collector/homekit_room_mapper.py collector/test_schedule.py
 python3 -m unittest discover -s collector -p 'test_*.py'
 
 cd extractor

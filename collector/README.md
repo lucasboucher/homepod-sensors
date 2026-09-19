@@ -97,6 +97,19 @@ If the file is missing, unreadable, or has no entry for a HomePod, the
 collector keeps running. `name` then falls back to the HAP accessory Name
 when present, otherwise the `pairing.json` alias.
 
+To build the file interactively from a live pairing (same LAN as the
+HomePods), from `collector/`:
+
+```bash
+python3 -m homekit_room_mapper -f /path/to/pairing.json -o ~/homepod-rooms.json
+```
+
+The tool reads temperature and humidity so you can tell the speakers apart,
+asks for a room (Salon, Chambre, or a custom name), and writes Device ID →
+room only. It never writes pairing keys and never modifies `pairing.json`.
+HAP does not expose HomePod stereo-pair membership, so each accessory is
+mapped individually. The collector still POSTs one object per HomePod.
+
 ## Run
 
 ```bash

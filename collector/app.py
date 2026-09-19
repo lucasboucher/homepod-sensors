@@ -295,7 +295,7 @@ def close_pairing(pairing: Any) -> None:
             pass
 
 
-def read_homepod_sensors(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str, Any]:
+def read_homepod_snapshot(pairing: Any) -> dict[str, Any]:
     accessories = pairing.list_accessories_and_characteristics()
     temperature_ids, humidity_ids = find_sensor_characteristics(accessories)
     requested = temperature_ids + humidity_ids
@@ -309,17 +309,27 @@ def read_homepod_sensors(name: str, pairing: Any, rooms: dict[str, str]) -> dict
         raise RuntimeError("temperature and humidity readings were empty")
 
     preferred_aids = {aid for aid, _iid in requested}
+    return {
+        "device_id": pairing_accessory_id(pairing),
+        "hap_name": hap_accessory_name(accessories, preferred_aids),
+        "temperature_c": temperature,
+        "humidity_percent": humidity,
+    }
+
+
+def read_homepod_sensors(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str, Any]:
+    snapshot = read_homepod_snapshot(pairing)
     display_name = resolve_sensor_name(
-        pairing_accessory_id(pairing),
+        snapshot["device_id"],
         name,
-        hap_accessory_name(accessories, preferred_aids),
+        snapshot["hap_name"],
         rooms,
     )
     reading: dict[str, Any] = {"name": display_name}
-    if temperature is not None:
-        reading["temperature_c"] = temperature
-    if humidity is not None:
-        reading["humidity_percent"] = humidity
+    if snapshot["temperature_c"] is not None:
+        reading["temperature_c"] = snapshot["temperature_c"]
+    if snapshot["humidity_percent"] is not None:
+        reading["humidity_percent"] = snapshot["humidity_percent"]
     return reading
 
 

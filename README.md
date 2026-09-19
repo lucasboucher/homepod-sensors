@@ -102,6 +102,7 @@ homepod-sensors/
 │   ├── requirements.txt
 │   ├── constraints.txt
 │   ├── app.py
+│   ├── homekit_room_mapper.py
 │   ├── pairing.example.json
 │   ├── rooms.example.json
 │   ├── env.example
@@ -286,9 +287,16 @@ The collector POSTs:
 `HTTP_TIMEOUT_SECONDS`. Prefer the generic names.
 
 See [collector/env.example](collector/env.example). For Compose, also set
-`PAIRING_FILE_HOST` (host path to the local pairing file) and optionally
+`PAIRING_FILE_HOST` (host path to the local pairing file) and
 `ROOMS_FILE_HOST`. Never commit a filled `.env`, `pairing.json`, or
 `rooms.json`.
+
+A local helper can build `rooms.json` without copying Device IDs by hand:
+
+```bash
+cd collector
+python3 -m homekit_room_mapper -f /path/to/pairing.json -o ~/homepod-rooms.json
+```
 
 ## What this project does not do
 
