@@ -1,0 +1,10 @@
+pairing.json
+.env
+.env.*
+__pycache__
+*.pyc
+.venv
+venv
+*.md
+env.example
+pairing.example.json

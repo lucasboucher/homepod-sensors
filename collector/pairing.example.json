@@ -1,0 +1,22 @@
+{
+  "HomePod-1": {
+    "AccessoryPairingID": "<AccessoryPairingID>",
+    "AccessoryLTPK": "<AccessoryLTPK>",
+    "iOSPairingId": "<iOSPairingId>",
+    "iOSDeviceLTSK": "<iOSDeviceLTSK>",
+    "iOSDeviceLTPK": "<iOSDeviceLTPK>",
+    "AccessoryIP": "<IPv4Address>",
+    "AccessoryPort": "<Port>",
+    "Connection": "IP"
+  },
+  "HomePod-2": {
+    "AccessoryPairingID": "<AccessoryPairingID>",
+    "AccessoryLTPK": "<AccessoryLTPK>",
+    "iOSPairingId": "<iOSPairingId>",
+    "iOSDeviceLTSK": "<iOSDeviceLTSK>",
+    "iOSDeviceLTPK": "<iOSDeviceLTPK>",
+    "AccessoryIP": "<IPv4Address>",
+    "AccessoryPort": "<Port>",
+    "Connection": "IP"
+  }
+}

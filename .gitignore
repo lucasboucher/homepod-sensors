@@ -1,0 +1,40 @@
+# macOS
+.DS_Store
+
+# Swift / SPM
+.build/
+# Ignore only root-level generated Package.resolved files
+/Package.resolved
+*.xcuserdata/
+.swiftpm/
+
+# Extractor runtime, dumps, and workflow state
+.run/
+dump/
+dump.txt
+**/dump.txt
+reports/
+
+# HomeKit pairing data and other secrets — never commit
+pairing.json
+**/pairing.json
+!**/pairing.example.json
+*.pem
+*.p8
+*.p12
+*.mobileprovision
+*.key
+secrets/
+
+# Environment files
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.Python
