@@ -5,5 +5,8 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     network_mode: host
+    environment:
+      HTTP_ENDPOINT_URL: ${HTTP_ENDPOINT_URL}
+      PAIRING_FILE: ${PAIRING_FILE}
     volumes:
       - ${PAIRING_FILE_HOST}:/app/pairing.json:ro
