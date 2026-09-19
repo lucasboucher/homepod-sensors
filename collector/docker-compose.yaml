@@ -5,3 +5,5 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     network_mode: host
+    volumes:
+      - ${PAIRING_FILE_HOST}:/app/pairing.json:ro
