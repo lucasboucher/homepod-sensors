@@ -121,7 +121,7 @@ docker run --rm \
   -e POLL_INTERVAL_SECONDS=600 \
   -e PAIRING_FILE=/app/pairing.json \
   -e ROOMS_FILE=/app/rooms.json \
-  -v /absolute/path/to/pairing.json:/app/pairing.json:ro \
+  -v /absolute/path/to/pairing.json:/app/pairing.json:rw \
   -v /absolute/path/to/rooms.json:/app/rooms.json:ro \
   homepod-collector
 ```
@@ -130,14 +130,15 @@ Replace the endpoint URL and pairing-file path with your local values.
 The rooms bind mount is optional. Do not commit those values.
 
 The pairing file is created locally and must never be committed. The collector
-mounts it read-only at `/app/pairing.json`. The HTTP endpoint is generic: any
+mounts it read-write at `/app/pairing.json` so discovered `AccessoryIP` /
+`AccessoryPort` values can be persisted. The HTTP endpoint is generic: any
 service that accepts the JSON POST. n8n and Home Assistant are only example
 consumers.
 
 ## Docker Compose
 
 [docker-compose.yaml](docker-compose.yaml) uses `network_mode: host` and mounts
-`${PAIRING_FILE_HOST}` at `/app/pairing.json:ro` and `${ROOMS_FILE_HOST}` at
+`${PAIRING_FILE_HOST}` at `/app/pairing.json:rw` and `${ROOMS_FILE_HOST}` at
 `/app/rooms.json:ro`. Set `ROOMS_FILE_HOST` in the deployment environment to
 the real host file. If that file is missing inside the container, the
 collector ignores it and falls back.
@@ -173,9 +174,10 @@ From the repository root (including Dokploy `--env-file collector/.env`):
 docker compose --env-file collector/.env -f collector/docker-compose.yaml up --build
 ```
 
-The image runs as uid 1000. The host pairing file and optional rooms file
-must be readable by that user (for example mode `644`). Do not make them
-world-writable.
+The image runs as uid 1000. The host pairing file must be readable and
+writable by that user (for example `chown 1000:1000` and mode `600`). The
+optional rooms file only needs to be readable (for example mode `644`). Do
+not make either file world-writable.
 
 The same flags work with Docker Compose, systemd, or any orchestrator that
 can set host networking, environment variables, and a bind mount.
