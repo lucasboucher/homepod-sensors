@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import types
@@ -110,6 +111,19 @@ class PersistEndpointsTests(unittest.TestCase):
             self.assertEqual(saved["HomePod-1"]["AccessoryIP"], "192.168.1.99")
             self.assertEqual(saved["HomePod-1"]["AccessoryPort"], 54321)
             self.assertEqual(saved["HomePod-1"]["AccessoryLTPK"], "secret")
+
+    def test_write_json_file_when_target_dir_is_not_writable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target_dir = Path(tmp) / "ro"
+            target_dir.mkdir()
+            path = target_dir / "pairing.json"
+            path.write_text("{}\n", encoding="utf-8")
+            os.chmod(target_dir, 0o555)
+            try:
+                app._write_json_file(str(path), {"ok": True})
+                self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"ok": True})
+            finally:
+                os.chmod(target_dir, 0o755)
 
     def test_persist_noop_when_unchanged(self) -> None:
         payload = {

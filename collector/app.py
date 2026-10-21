@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import errno
 import json
 import logging
 import os
@@ -428,29 +427,29 @@ def collect_homepod(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str,
 
 
 def _write_json_file(path: str, payload: dict[str, Any]) -> None:
-    """Write JSON, preferring replace; fall back to in-place for bind mounts."""
+    """Write JSON via a temp file in the system temp dir, then replace.
+
+    Staging in /tmp avoids PermissionError when the pairing file lives in a
+    root-owned directory like /app. os.replace often fails across bind-mount
+    filesystems (EXDEV); fall back to an in-place write in that case.
+    """
     text = json.dumps(payload, indent=2) + "\n"
-    directory = os.path.dirname(os.path.abspath(path)) or "."
-    fd, tmp_path = tempfile.mkstemp(prefix=".pairing-", suffix=".json", dir=directory)
+    fd, tmp_path = tempfile.mkstemp(prefix="homepod-pairing-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
-        os.replace(tmp_path, path)
-    except OSError as exc:
         try:
-            os.unlink(tmp_path)
+            os.replace(tmp_path, path)
+            tmp_path = ""
         except OSError:
-            pass
-        if exc.errno != errno.EXDEV:
-            raise
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(text)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def pairing_endpoint(pairing: Any) -> tuple[Any, Any]:
