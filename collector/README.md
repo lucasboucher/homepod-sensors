@@ -71,7 +71,9 @@ Template with placeholders only: [pairing.example.json](pairing.example.json).
 The collector reads **every** accessory in that file. Choose aliases yourself
 when you build the file from the extractor dump. IP addresses and ports come
 from the pairing file. If an address is stale, `homekit[IP]` can fall back to
-HAP discovery on the host network.
+HAP discovery on the host network. When discovery finds a new endpoint, the
+collector updates only `AccessoryIP` / `AccessoryPort` in the mounted pairing
+file (compose mounts it read-write for that reason).
 
 ## rooms.json
 
@@ -149,11 +151,11 @@ cp env.example .env
 
 Set at least:
 
-| Variable | Role |
-|----------|------|
+| Variable            | Role                                                   |
+| ------------------- | ------------------------------------------------------ |
 | `PAIRING_FILE_HOST` | Absolute path to your local `pairing.json` on the host |
-| `HTTP_ENDPOINT_URL` | URL that receives `POST` + JSON |
-| `ROOMS_FILE_HOST` | Host path to your local `rooms.json` (Compose mount) |
+| `HTTP_ENDPOINT_URL` | URL that receives `POST` + JSON                        |
+| `ROOMS_FILE_HOST`   | Host path to your local `rooms.json` (Compose mount)   |
 
 Compose always sets `PAIRING_FILE=/app/pairing.json` and
 `ROOMS_FILE=/app/rooms.json` inside the container.
@@ -180,14 +182,14 @@ can set host networking, environment variables, and a bind mount.
 
 ## Environment variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `PAIRING_FILE` | no | `/app/pairing.json` | Path to the runtime pairing file |
-| `ROOMS_FILE` | no | `/app/rooms.json` | Optional Device ID → display-name map |
-| `HTTP_ENDPOINT_URL` | **yes** | none | URL that receives the JSON POST |
-| `POLL_INTERVAL_SECONDS` | no | `600` | Seconds between clock-aligned collection slots |
-| `HOMEKIT_TIMEOUT_SECONDS` | no | `15` | Timeout for one HomeKit attempt |
-| `HTTP_TIMEOUT_SECONDS` | no | `10` | Timeout for one HTTP POST |
+| Variable                  | Required | Default             | Description                                    |
+| ------------------------- | -------- | ------------------- | ---------------------------------------------- |
+| `PAIRING_FILE`            | no       | `/app/pairing.json` | Path to the runtime pairing file               |
+| `ROOMS_FILE`              | no       | `/app/rooms.json`   | Optional Device ID → display-name map          |
+| `HTTP_ENDPOINT_URL`       | **yes**  | none                | URL that receives the JSON POST                |
+| `POLL_INTERVAL_SECONDS`   | no       | `600`               | Seconds between clock-aligned collection slots |
+| `HOMEKIT_TIMEOUT_SECONDS` | no       | `15`                | Timeout for one HomeKit attempt                |
+| `HTTP_TIMEOUT_SECONDS`    | no       | `10`                | Timeout for one HTTP POST                      |
 
 Aliases (same meaning, prefer the names above):
 

@@ -3,17 +3,19 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
 import signal
 import socket
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+import warnings
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,12 +40,62 @@ ACCESSORY_INFORMATION_UUID = "0000003E-0000-1000-8000-0026BB765291"
 
 LOGGER = logging.getLogger("homepod-collector")
 STOP_EVENT = threading.Event()
+_HOMEKIT_PATCHED = False
 
 
 def configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stdout, force=True)
     logging.getLogger("homekit").setLevel(logging.WARNING)
     logging.getLogger("zeroconf").setLevel(logging.ERROR)
+    warnings.filterwarnings(
+        "ignore",
+        category=FutureWarning,
+        module=r"homekit\.zeroconf_impl(\.|$)",
+    )
+
+
+def patch_homekit_runtime() -> None:
+    """Work around homekit 0.19.0 issues with newer zeroconf / failed mDNS lookups.
+
+    - CollectingListener lacks update_service (required by modern zeroconf).
+    - IpSession indexes find_device_ip_and_port(None) before checking for None.
+    """
+    global _HOMEKIT_PATCHED
+    if _HOMEKIT_PATCHED:
+        return
+
+    try:
+        from homekit.exceptions import AccessoryNotFoundError
+        from homekit.zeroconf_impl import CollectingListener
+        import homekit.controller.ip_implementation as ip_implementation
+        import homekit.zeroconf_impl as zeroconf_impl
+    except Exception as exc:
+        LOGGER.warning("Could not patch homekit runtime: %s", exception_label(exc))
+        return
+
+    if not hasattr(CollectingListener, "update_service"):
+        CollectingListener.update_service = lambda self, zeroconf, service_type, name: None
+
+    original_find = zeroconf_impl.find_device_ip_and_port
+
+    def find_device_ip_and_port(device_id: str, max_seconds: int = 10):
+        result = original_find(device_id, max_seconds)
+        if result is None:
+            raise AccessoryNotFoundError(f"Device {device_id} not found via mDNS")
+        return result
+
+    zeroconf_impl.find_device_ip_and_port = find_device_ip_and_port
+    ip_implementation.find_device_ip_and_port = find_device_ip_and_port
+    _HOMEKIT_PATCHED = True
+
+
+def clarify_homekit_exception(exc: BaseException) -> BaseException:
+    message = str(exc)
+    if isinstance(exc, TypeError) and "NoneType" in message and "subscriptable" in message:
+        return RuntimeError("HomePod not found via HAP/mDNS (stale IP and discovery failed)")
+    if isinstance(exc, AttributeError) and "sec_http" in message:
+        return RuntimeError("HomeKit connection failed (incomplete session)")
+    return exc
 
 
 def env_int(name: str, default: int) -> int:
@@ -310,17 +362,23 @@ def close_pairing(pairing: Any) -> None:
 
 
 def read_homepod_snapshot(pairing: Any) -> dict[str, Any]:
-    accessories = pairing.list_accessories_and_characteristics()
-    temperature_ids, humidity_ids = find_sensor_characteristics(accessories)
-    requested = temperature_ids + humidity_ids
-    if not requested:
-        raise RuntimeError("no temperature or humidity characteristics found")
+    try:
+        accessories = pairing.list_accessories_and_characteristics()
+        temperature_ids, humidity_ids = find_sensor_characteristics(accessories)
+        requested = temperature_ids + humidity_ids
+        if not requested:
+            raise RuntimeError("no temperature or humidity characteristics found")
 
-    results = pairing.get_characteristics(requested)
-    temperature = first_numeric_value(results, temperature_ids)
-    humidity = first_numeric_value(results, humidity_ids)
-    if temperature is None and humidity is None:
-        raise RuntimeError("temperature and humidity readings were empty")
+        results = pairing.get_characteristics(requested)
+        temperature = first_numeric_value(results, temperature_ids)
+        humidity = first_numeric_value(results, humidity_ids)
+        if temperature is None and humidity is None:
+            raise RuntimeError("temperature and humidity readings were empty")
+    except Exception as exc:
+        clarified = clarify_homekit_exception(exc)
+        if clarified is exc:
+            raise
+        raise clarified from exc
 
     preferred_aids = {aid for aid, _iid in requested}
     return {
@@ -349,12 +407,10 @@ def read_homepod_sensors(name: str, pairing: Any, rooms: dict[str, str]) -> dict
 
 def collect_homepod(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str, Any] | None:
     last_error = "unknown error"
-    last_exc: BaseException | None = None
     for attempt in range(1, HOMEKIT_ATTEMPTS + 1):
         try:
             return read_homepod_sensors(name, pairing, rooms)
         except Exception as exc:
-            last_exc = exc
             last_error = exception_label(exc)
             close_pairing(pairing)
             if attempt < HOMEKIT_ATTEMPTS:
@@ -367,36 +423,111 @@ def collect_homepod(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str,
                     HOMEKIT_ATTEMPTS,
                 )
                 time.sleep(delay)
-    if last_exc is not None:
-        LOGGER.error(
-            "Failed to collect from %s: %s",
-            name,
-            last_error,
-            exc_info=(type(last_exc), last_exc, last_exc.__traceback__),
-        )
-    else:
-        LOGGER.error("Failed to collect from %s: %s", name, last_error)
+    LOGGER.error("Failed to collect from %s: %s", name, last_error)
     return None
 
 
+def _write_json_file(path: str, payload: dict[str, Any]) -> None:
+    """Write JSON, preferring replace; fall back to in-place for bind mounts."""
+    text = json.dumps(payload, indent=2) + "\n"
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix=".pairing-", suffix=".json", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        if exc.errno != errno.EXDEV:
+            raise
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def pairing_endpoint(pairing: Any) -> tuple[Any, Any]:
+    data = getattr(pairing, "pairing_data", None)
+    if not isinstance(data, dict):
+        getter = getattr(pairing, "_get_pairing_data", None)
+        data = getter() if callable(getter) else None
+    if not isinstance(data, dict):
+        return (None, None)
+    return (data.get("AccessoryIP"), data.get("AccessoryPort"))
+
+
+def pairing_endpoints(pairings: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
+    return {alias: pairing_endpoint(pairing) for alias, pairing in pairings.items()}
+
+
+def persist_pairing_endpoints(
+    pairing_file: str,
+    pairings: dict[str, Any],
+    before: dict[str, tuple[Any, Any]],
+) -> dict[str, tuple[Any, Any]]:
+    """Persist AccessoryIP/AccessoryPort when homekit discovers newer endpoints.
+
+    Only those two fields are rewritten so secrets and file shape stay intact.
+    Best-effort: logs a warning if the pairing file is not writable.
+    """
+    after = pairing_endpoints(pairings)
+    changed = {
+        alias: endpoint
+        for alias, endpoint in after.items()
+        if endpoint != before.get(alias) and endpoint[0] not in (None, "")
+    }
+    if not changed:
+        return after
+
+    try:
+        with open(pairing_file, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError("pairing file root must be an object")
+
+        updated_aliases: list[str] = []
+        for alias, (ip, port) in changed.items():
+            entry = payload.get(alias)
+            if not isinstance(entry, dict):
+                continue
+            if ip is not None:
+                entry["AccessoryIP"] = ip
+            if port is not None:
+                entry["AccessoryPort"] = port
+            updated_aliases.append(alias)
+
+        if not updated_aliases:
+            return after
+
+        _write_json_file(pairing_file, payload)
+        LOGGER.info("Persisted updated HomePod endpoints for %s", ", ".join(updated_aliases))
+    except Exception as exc:
+        LOGGER.warning(
+            "Could not persist HomePod endpoints to %s: %s",
+            pairing_file,
+            exception_label(exc),
+        )
+    return after
+
+
 def collect_all(pairings: dict[str, Any], rooms: dict[str, str]) -> list[dict[str, Any]]:
+    """Collect HomePods one at a time to avoid concurrent mDNS browsers."""
     LOGGER.info("Collecting sensor data")
-    names = list(pairings.keys())
-    readings: list[dict[str, Any] | None] = [None] * len(names)
-
-    def _collect(index: int, name: str) -> None:
-        readings[index] = collect_homepod(name, pairings[name], rooms)
-
-    with ThreadPoolExecutor(max_workers=max(1, len(names)), thread_name_prefix="homepod") as executor:
-        futures = [executor.submit(_collect, index, name) for index, name in enumerate(names)]
-        for future in futures:
-            try:
-                future.result()
-            except Exception as exc:
-                LOGGER.error("Unexpected collector error: %s", exception_label(exc))
-
     successful: list[dict[str, Any]] = []
-    for reading in readings:
+
+    for name, pairing in pairings.items():
+        try:
+            reading = collect_homepod(name, pairing, rooms)
+        except Exception as exc:
+            LOGGER.error("Unexpected collector error for %s: %s", name, exception_label(exc))
+            continue
         if not reading:
             continue
         temperature = reading.get("temperature_c")
@@ -470,6 +601,7 @@ def request_shutdown(signum: int, _frame: Any) -> None:
 
 def run_forever() -> None:
     configure_logging()
+    patch_homekit_runtime()
     LOGGER.info("Starting HomePod collector")
 
     config = load_config()
@@ -486,6 +618,7 @@ def run_forever() -> None:
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
 
+    endpoint_snapshot = pairing_endpoints(pairings)
     interval = config["poll_interval_seconds"]
     while not STOP_EVENT.is_set():
         now = datetime.now(timezone.utc)
@@ -497,6 +630,11 @@ def run_forever() -> None:
 
         try:
             sensors = collect_all(pairings, rooms)
+            endpoint_snapshot = persist_pairing_endpoints(
+                config["pairing_file"],
+                pairings,
+                endpoint_snapshot,
+            )
             if sensors:
                 LOGGER.info("Sending %s sensor readings", len(sensors))
                 payload = {

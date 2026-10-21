@@ -31,6 +31,7 @@ from app import (  # noqa: E402
     exception_label,
     load_controller,
     pairing_accessory_id,
+    patch_homekit_runtime,
     read_homepod_snapshot,
 )
 
@@ -215,6 +216,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    patch_homekit_runtime()
     socket.setdefaulttimeout(args.timeout)
     controller = load_controller(args.pairing_file)
     pairings = controller.get_pairings()

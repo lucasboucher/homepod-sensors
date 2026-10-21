@@ -13,5 +13,5 @@ services:
       HOMEKIT_TIMEOUT_SECONDS: ${HOMEKIT_TIMEOUT_SECONDS:-15}
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-10}
     volumes:
-      - ${PAIRING_FILE_HOST}:/app/pairing.json:ro
+      - ${PAIRING_FILE_HOST}:/app/pairing.json:rw
       - ${ROOMS_FILE_HOST}:/app/rooms.json:ro
