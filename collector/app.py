@@ -103,7 +103,11 @@ def load_config() -> dict[str, Any]:
 
 
 def exception_label(exc: BaseException) -> str:
-    return type(exc).__name__
+    name = type(exc).__name__
+    message = str(exc).strip()
+    if message:
+        return f"{name}: {message}"
+    return name
 
 
 def utc_timestamp() -> str:
@@ -287,10 +291,20 @@ def first_numeric_value(
 
 
 def close_pairing(pairing: Any) -> None:
+    """Close the HAP session and drop it so the next call opens a fresh one.
+
+    homekit IpPairing.close() shuts the socket but leaves pairing.session set.
+    Reusing that dead session yields immediate AttributeError on later reads.
+    """
     close = getattr(pairing, "close", None)
     if callable(close):
         try:
             close()
+        except Exception:
+            pass
+    if hasattr(pairing, "session"):
+        try:
+            pairing.session = None
         except Exception:
             pass
 
@@ -335,10 +349,12 @@ def read_homepod_sensors(name: str, pairing: Any, rooms: dict[str, str]) -> dict
 
 def collect_homepod(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str, Any] | None:
     last_error = "unknown error"
+    last_exc: BaseException | None = None
     for attempt in range(1, HOMEKIT_ATTEMPTS + 1):
         try:
             return read_homepod_sensors(name, pairing, rooms)
         except Exception as exc:
+            last_exc = exc
             last_error = exception_label(exc)
             close_pairing(pairing)
             if attempt < HOMEKIT_ATTEMPTS:
@@ -351,7 +367,15 @@ def collect_homepod(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str,
                     HOMEKIT_ATTEMPTS,
                 )
                 time.sleep(delay)
-    LOGGER.error("Failed to collect from %s: %s", name, last_error)
+    if last_exc is not None:
+        LOGGER.error(
+            "Failed to collect from %s: %s",
+            name,
+            last_error,
+            exc_info=(type(last_exc), last_exc, last_exc.__traceback__),
+        )
+    else:
+        LOGGER.error("Failed to collect from %s: %s", name, last_error)
     return None
 
 
