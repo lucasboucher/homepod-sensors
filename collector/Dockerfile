@@ -21,4 +21,7 @@ RUN useradd --uid 1000 --user-group --create-home --home-dir /home/collector \
 
 USER collector
 
+HEALTHCHECK --interval=60s --timeout=5s --start-period=900s --retries=3 \
+    CMD ["python", "-u", "app.py", "--healthcheck"]
+
 CMD ["python", "-u", "app.py"]

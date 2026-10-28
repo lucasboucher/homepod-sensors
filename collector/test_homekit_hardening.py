@@ -7,9 +7,11 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
+from queue import Queue
 from unittest import mock
 
 
@@ -145,6 +147,130 @@ class PersistEndpointsTests(unittest.TestCase):
             app.persist_pairing_endpoints(str(path), {"HomePod-1": pairing}, before)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
             self.assertEqual(path.stat().st_mtime_ns, mtime_before)
+
+
+class HeartbeatTests(unittest.TestCase):
+    def test_touch_and_freshness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "hb")
+            app.touch_heartbeat(path)
+            self.assertTrue(app.heartbeat_is_fresh(path, 60, now=time.time()))
+            self.assertFalse(app.heartbeat_is_fresh(path, 60, now=time.time() + 120))
+            self.assertFalse(app.heartbeat_is_fresh(str(Path(tmp) / "missing"), 60))
+
+    def test_apply_pairing_endpoint(self) -> None:
+        pairing = types.SimpleNamespace(pairing_data={"AccessoryIP": "1.1.1.1", "AccessoryPort": 1})
+        app.apply_pairing_endpoint(pairing, "9.9.9.9", 555)
+        self.assertEqual(pairing.pairing_data["AccessoryIP"], "9.9.9.9")
+        self.assertEqual(pairing.pairing_data["AccessoryPort"], 555)
+
+
+class AttemptDeadlineTests(unittest.TestCase):
+    def test_kills_hung_child_and_raises_timeout(self) -> None:
+        class HungProcess:
+            def __init__(self, target=None, args=(), daemon=None):
+                self._alive = True
+                self.exitcode = None
+                self.terminate_calls = 0
+
+            def start(self) -> None:
+                return None
+
+            def join(self, timeout=None) -> None:
+                return None
+
+            def is_alive(self) -> bool:
+                return self._alive
+
+            def terminate(self) -> None:
+                self.terminate_calls += 1
+                self._alive = False
+                self.exitcode = -15
+
+            def kill(self) -> None:
+                self._alive = False
+                self.exitcode = -9
+
+        with self.assertRaises(TimeoutError):
+            app.run_homepod_attempt_with_deadline(
+                "/tmp/pairing.json",
+                "HomePod-1",
+                {},
+                15,
+                1,
+                process_factory=HungProcess,
+            )
+
+    def test_returns_worker_payload(self) -> None:
+        class OkProcess:
+            def __init__(self, target=None, args=(), daemon=None):
+                self.args = args
+                self._alive = True
+                self.exitcode = 0
+
+            def start(self) -> None:
+                queue = self.args[-1]
+                queue.put(
+                    {
+                        "ok": True,
+                        "reading": {"name": "Salon", "temperature_c": 20.5},
+                        "endpoint": ["192.168.1.10", 12345],
+                    }
+                )
+                self._alive = False
+
+            def join(self, timeout=None) -> None:
+                return None
+
+            def is_alive(self) -> bool:
+                return self._alive
+
+            def terminate(self) -> None:
+                self._alive = False
+
+            def kill(self) -> None:
+                self._alive = False
+
+        payload = app.run_homepod_attempt_with_deadline(
+            "/tmp/pairing.json",
+            "HomePod-1",
+            {},
+            15,
+            5,
+            process_factory=OkProcess,
+            queue_factory=Queue,
+        )
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["reading"]["name"], "Salon")
+        self.assertEqual(payload["endpoint"], ["192.168.1.10", 12345])
+
+    def test_collect_homepod_applies_endpoint_from_worker(self) -> None:
+        pairing = types.SimpleNamespace(
+            pairing_data={"AccessoryIP": "192.168.1.1", "AccessoryPort": 1},
+            session=object(),
+        )
+        pairing.close = lambda: None
+        with mock.patch.object(
+            app,
+            "run_homepod_attempt_with_deadline",
+            return_value={
+                "ok": True,
+                "reading": {"name": "Salon", "temperature_c": 21, "humidity_percent": 50},
+                "endpoint": ["192.168.1.50", 9999],
+            },
+        ):
+            reading = app.collect_homepod(
+                "HomePod-1",
+                pairing,
+                {},
+                pairing_file="/tmp/pairing.json",
+                homekit_timeout_seconds=15,
+                attempt_deadline_seconds=45,
+            )
+        self.assertEqual(reading["name"], "Salon")
+        self.assertEqual(pairing.pairing_data["AccessoryIP"], "192.168.1.50")
+        self.assertEqual(pairing.pairing_data["AccessoryPort"], 9999)
+        self.assertIsNone(pairing.session)
 
 
 class PatchHomekitTests(unittest.TestCase):

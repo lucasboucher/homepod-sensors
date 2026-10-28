@@ -160,9 +160,8 @@ Set at least:
 
 Compose always sets `PAIRING_FILE=/app/pairing.json` and
 `ROOMS_FILE=/app/rooms.json` inside the container.
-Optional: `POLL_INTERVAL_SECONDS` (default 600, clock-aligned 10-minute
-slots), `HOMEKIT_TIMEOUT_SECONDS` (default 15), `HTTP_TIMEOUT_SECONDS`
-(default 10).
+Optional tuning vars (`POLL_INTERVAL_SECONDS`, timeouts, heartbeat) are
+listed under [Environment variables](#environment-variables).
 
 ```bash
 docker compose --env-file .env up --build
@@ -184,14 +183,17 @@ can set host networking, environment variables, and a bind mount.
 
 ## Environment variables
 
-| Variable                  | Required | Default             | Description                                    |
-| ------------------------- | -------- | ------------------- | ---------------------------------------------- |
-| `PAIRING_FILE`            | no       | `/app/pairing.json` | Path to the runtime pairing file               |
-| `ROOMS_FILE`              | no       | `/app/rooms.json`   | Optional Device ID → display-name map          |
-| `HTTP_ENDPOINT_URL`       | **yes**  | none                | URL that receives the JSON POST                |
-| `POLL_INTERVAL_SECONDS`   | no       | `600`               | Seconds between clock-aligned collection slots |
-| `HOMEKIT_TIMEOUT_SECONDS` | no       | `15`                | Timeout for one HomeKit attempt                |
-| `HTTP_TIMEOUT_SECONDS`    | no       | `10`                | Timeout for one HTTP POST                      |
+| Variable                           | Required | Default                            | Description                                    |
+| ---------------------------------- | -------- | ---------------------------------- | ---------------------------------------------- |
+| `PAIRING_FILE`                     | no       | `/app/pairing.json`                | Path to the runtime pairing file               |
+| `ROOMS_FILE`                       | no       | `/app/rooms.json`                  | Optional Device ID → display-name map          |
+| `HTTP_ENDPOINT_URL`                | **yes**  | none                               | URL that receives the JSON POST                |
+| `POLL_INTERVAL_SECONDS`            | no       | `600`                              | Seconds between clock-aligned collection slots |
+| `HOMEKIT_TIMEOUT_SECONDS`          | no       | `15`                               | Socket timeout for one HomeKit attempt         |
+| `HOMEKIT_ATTEMPT_DEADLINE_SECONDS` | no       | `45`                               | Hard kill budget for one HomeKit child process |
+| `HTTP_TIMEOUT_SECONDS`             | no       | `10`                               | Timeout for one HTTP POST                      |
+| `HEARTBEAT_FILE`                   | no       | `/tmp/homepod-collector-heartbeat` | Progress file for Docker HEALTHCHECK           |
+| `HEARTBEAT_MAX_AGE_SECONDS`        | no       | `1800`                             | Max age before HEALTHCHECK is unhealthy (no auto-restart) |
 
 Aliases (same meaning, prefer the names above):
 

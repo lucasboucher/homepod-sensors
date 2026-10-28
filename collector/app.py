@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import multiprocessing
 import os
 import signal
 import socket
@@ -16,6 +17,7 @@ import urllib.error
 import urllib.request
 import warnings
 from datetime import datetime, timezone
+from queue import Empty as QueueEmpty
 from typing import Any
 
 from homekit.controller import Controller
@@ -27,10 +29,15 @@ DEFAULT_ROOMS_FILE = "/app/rooms.json"
 DEFAULT_POLL_INTERVAL_SECONDS = 600
 DEFAULT_HOMEKIT_TIMEOUT_SECONDS = 15
 DEFAULT_HTTP_TIMEOUT_SECONDS = 10
+DEFAULT_HOMEKIT_ATTEMPT_DEADLINE_SECONDS = 45
+DEFAULT_HEARTBEAT_FILE = "/tmp/homepod-collector-heartbeat"
+DEFAULT_HEARTBEAT_MAX_AGE_SECONDS = 1800
 HOMEKIT_ATTEMPTS = 3
 HTTP_ATTEMPTS = 3
 HOMEKIT_BACKOFF_SECONDS = (1, 2)
 HTTP_BACKOFF_SECONDS = (1, 2)
+PROCESS_TERMINATE_GRACE_SECONDS = 5
+PROCESS_KILL_GRACE_SECONDS = 2
 
 TEMPERATURE_UUID = CharacteristicsTypes.get_uuid(CharacteristicsTypes.TEMPERATURE_CURRENT).upper()
 HUMIDITY_UUID = CharacteristicsTypes.get_uuid(CharacteristicsTypes.RELATIVE_HUMIDITY_CURRENT).upper()
@@ -145,12 +152,54 @@ def load_config() -> dict[str, Any]:
         "endpoint_url": endpoint_url,
         "poll_interval_seconds": env_int("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS),
         "homekit_timeout_seconds": env_int("HOMEKIT_TIMEOUT_SECONDS", DEFAULT_HOMEKIT_TIMEOUT_SECONDS),
+        "homekit_attempt_deadline_seconds": env_int(
+            "HOMEKIT_ATTEMPT_DEADLINE_SECONDS",
+            DEFAULT_HOMEKIT_ATTEMPT_DEADLINE_SECONDS,
+        ),
         "http_timeout_seconds": env_int_from(
             "HTTP_TIMEOUT_SECONDS",
             "N8N_TIMEOUT_SECONDS",
             default=DEFAULT_HTTP_TIMEOUT_SECONDS,
         ),
+        "heartbeat_file": env_str("HEARTBEAT_FILE") or DEFAULT_HEARTBEAT_FILE,
     }
+
+
+def touch_heartbeat(path: str) -> None:
+    """Record that the collector main loop is still making progress."""
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(utc_timestamp() + "\n")
+
+
+def heartbeat_is_fresh(path: str, max_age_seconds: int, now: float | None = None) -> bool:
+    if max_age_seconds <= 0:
+        return False
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return False
+    current = time.time() if now is None else now
+    return (current - mtime) <= max_age_seconds
+
+
+def run_healthcheck() -> int:
+    """Exit 0 when heartbeat is fresh; used by Docker HEALTHCHECK."""
+    path = env_str("HEARTBEAT_FILE") or DEFAULT_HEARTBEAT_FILE
+    max_age = env_int("HEARTBEAT_MAX_AGE_SECONDS", DEFAULT_HEARTBEAT_MAX_AGE_SECONDS)
+    return 0 if heartbeat_is_fresh(path, max_age) else 1
+
+
+def apply_pairing_endpoint(pairing: Any, ip: Any, port: Any) -> None:
+    data = getattr(pairing, "pairing_data", None)
+    if not isinstance(data, dict):
+        return
+    if ip not in (None, ""):
+        data["AccessoryIP"] = ip
+    if port is not None:
+        data["AccessoryPort"] = port
 
 
 def exception_label(exc: BaseException) -> str:
@@ -404,11 +453,119 @@ def read_homepod_sensors(name: str, pairing: Any, rooms: dict[str, str]) -> dict
     return reading
 
 
-def collect_homepod(name: str, pairing: Any, rooms: dict[str, str]) -> dict[str, Any] | None:
+def _homepod_attempt_worker(
+    pairing_file: str,
+    name: str,
+    rooms: dict[str, str],
+    homekit_timeout_seconds: int,
+    result_queue: Any,
+) -> None:
+    """Child process: one HomeKit read. Pairing objects are not picklable."""
+    try:
+        configure_logging()
+        patch_homekit_runtime()
+        socket.setdefaulttimeout(homekit_timeout_seconds)
+        controller = load_controller(pairing_file)
+        pairings = controller.get_pairings()
+        pairing = pairings.get(name)
+        if pairing is None:
+            result_queue.put({"ok": False, "error": f"pairing alias not found: {name}"})
+            return
+        try:
+            reading = read_homepod_sensors(name, pairing, rooms)
+            ip, port = pairing_endpoint(pairing)
+            result_queue.put(
+                {
+                    "ok": True,
+                    "reading": reading,
+                    "endpoint": [ip, port],
+                }
+            )
+        finally:
+            close_pairing(pairing)
+    except SystemExit as exc:
+        result_queue.put({"ok": False, "error": str(exc) or "SystemExit"})
+    except BaseException as exc:
+        result_queue.put({"ok": False, "error": exception_label(exc)})
+
+
+def _stop_process(proc: Any) -> None:
+    if not proc.is_alive():
+        return
+    proc.terminate()
+    proc.join(PROCESS_TERMINATE_GRACE_SECONDS)
+    if proc.is_alive():
+        proc.kill()
+        proc.join(PROCESS_KILL_GRACE_SECONDS)
+
+
+def run_homepod_attempt_with_deadline(
+    pairing_file: str,
+    name: str,
+    rooms: dict[str, str],
+    homekit_timeout_seconds: int,
+    deadline_seconds: int,
+    *,
+    process_factory: Any | None = None,
+    queue_factory: Any | None = None,
+) -> dict[str, Any]:
+    """Run one HomeKit attempt in a spawn child; kill it if it exceeds deadline.
+
+    Returns a worker payload dict with ok=True/False. Raises TimeoutError when
+    the child is still alive after the deadline (busy-loop / hung HAP).
+    """
+    ctx = multiprocessing.get_context("spawn")
+    make_queue = queue_factory or ctx.Queue
+    result_queue = make_queue(1)
+    factory = process_factory or ctx.Process
+    proc = factory(
+        target=_homepod_attempt_worker,
+        args=(pairing_file, name, rooms, homekit_timeout_seconds, result_queue),
+        daemon=True,
+    )
+    proc.start()
+    proc.join(deadline_seconds)
+    if proc.is_alive():
+        _stop_process(proc)
+        raise TimeoutError(f"HomeKit attempt exceeded {deadline_seconds}s deadline")
+
+    try:
+        return result_queue.get_nowait()
+    except QueueEmpty as exc:
+        raise RuntimeError(
+            f"HomeKit worker exited without result (exitcode={proc.exitcode})"
+        ) from exc
+
+
+def collect_homepod(
+    name: str,
+    pairing: Any,
+    rooms: dict[str, str],
+    *,
+    pairing_file: str,
+    homekit_timeout_seconds: int = DEFAULT_HOMEKIT_TIMEOUT_SECONDS,
+    attempt_deadline_seconds: int = DEFAULT_HOMEKIT_ATTEMPT_DEADLINE_SECONDS,
+) -> dict[str, Any] | None:
     last_error = "unknown error"
     for attempt in range(1, HOMEKIT_ATTEMPTS + 1):
         try:
-            return read_homepod_sensors(name, pairing, rooms)
+            payload = run_homepod_attempt_with_deadline(
+                pairing_file,
+                name,
+                rooms,
+                homekit_timeout_seconds,
+                attempt_deadline_seconds,
+            )
+            if not payload.get("ok"):
+                raise RuntimeError(str(payload.get("error") or "unknown worker error"))
+            endpoint = payload.get("endpoint") or [None, None]
+            if isinstance(endpoint, (list, tuple)) and len(endpoint) >= 2:
+                apply_pairing_endpoint(pairing, endpoint[0], endpoint[1])
+            close_pairing(pairing)
+            reading = payload.get("reading")
+            if not isinstance(reading, dict):
+                raise RuntimeError("worker returned no reading")
+            return reading
         except Exception as exc:
             last_error = exception_label(exc)
             close_pairing(pairing)
@@ -516,14 +673,28 @@ def persist_pairing_endpoints(
     return after
 
 
-def collect_all(pairings: dict[str, Any], rooms: dict[str, str]) -> list[dict[str, Any]]:
+def collect_all(
+    pairings: dict[str, Any],
+    rooms: dict[str, str],
+    *,
+    pairing_file: str,
+    homekit_timeout_seconds: int = DEFAULT_HOMEKIT_TIMEOUT_SECONDS,
+    attempt_deadline_seconds: int = DEFAULT_HOMEKIT_ATTEMPT_DEADLINE_SECONDS,
+) -> list[dict[str, Any]]:
     """Collect HomePods one at a time to avoid concurrent mDNS browsers."""
     LOGGER.info("Collecting sensor data")
     successful: list[dict[str, Any]] = []
 
     for name, pairing in pairings.items():
         try:
-            reading = collect_homepod(name, pairing, rooms)
+            reading = collect_homepod(
+                name,
+                pairing,
+                rooms,
+                pairing_file=pairing_file,
+                homekit_timeout_seconds=homekit_timeout_seconds,
+                attempt_deadline_seconds=attempt_deadline_seconds,
+            )
         except Exception as exc:
             LOGGER.error("Unexpected collector error for %s: %s", name, exception_label(exc))
             continue
@@ -617,6 +788,7 @@ def run_forever() -> None:
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
 
+    touch_heartbeat(config["heartbeat_file"])
     endpoint_snapshot = pairing_endpoints(pairings)
     interval = config["poll_interval_seconds"]
     while not STOP_EVENT.is_set():
@@ -628,7 +800,13 @@ def run_forever() -> None:
             break
 
         try:
-            sensors = collect_all(pairings, rooms)
+            sensors = collect_all(
+                pairings,
+                rooms,
+                pairing_file=config["pairing_file"],
+                homekit_timeout_seconds=config["homekit_timeout_seconds"],
+                attempt_deadline_seconds=config["homekit_attempt_deadline_seconds"],
+            )
             endpoint_snapshot = persist_pairing_endpoints(
                 config["pairing_file"],
                 pairings,
@@ -650,7 +828,14 @@ def run_forever() -> None:
             LOGGER.info("Collection completed")
         except Exception as exc:
             LOGGER.error("Collection cycle failed: %s", exception_label(exc))
+        finally:
+            try:
+                touch_heartbeat(config["heartbeat_file"])
+            except Exception as exc:
+                LOGGER.warning("Could not update heartbeat: %s", exception_label(exc))
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--healthcheck":
+        raise SystemExit(run_healthcheck())
     run_forever()
